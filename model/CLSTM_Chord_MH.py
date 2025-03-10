@@ -8,7 +8,7 @@ import torch.nn as nn
 device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class LSTM_Chord(nn.Module):
-    def __init__(self,condition_window,input_size,hidden_size,chord_num,n_layers=2):
+    def __init__(self,condition_window,input_size,hidden_size,n_layers=2):
         super(LSTM_Chord,self).__init__()
         self.condition_window=condition_window
         self.input_size=input_size
@@ -35,6 +35,9 @@ class LSTM_Chord(nn.Module):
         pre_chord = chord_t_1
         condition_t_pitch, condition_t_duration, condition_t_position = torch.split(condition_t, [8, 8, 8], dim=-1)
         note_t_pitch, note_t_duration, note_t_position = torch.split(note_t, [49, 12, 72], dim=-1)
+        condition_t_pitch = condition_t_pitch.long()  # Ensure indices are integers
+        condition_t_duration = condition_t_duration.long()
+        condition_t_position = condition_t_position.long()
         p_embedding = self.p_embedding(condition_t_pitch)
         d_embedding = self.d_embedding(condition_t_duration)
         b_embedding = self.b_embedding(condition_t_position)

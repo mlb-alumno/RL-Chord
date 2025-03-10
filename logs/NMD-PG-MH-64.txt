@@ -1,0 +1,14 @@
+
+Hyperparameters: 
+Namespace(dataset='NMD', seq_len='64', model='PG', repre='MH', load_model=None, mutual_c=None, mutual_mc=None, batch_size='64', epoch='100', learning_rate='0.001')
+Hyperparameters: 
+Namespace(dataset='NMD', seq_len='64', model='PG', repre='MH', load_model=None, mutual_c=None, mutual_mc=None, batch_size='64', epoch='100', learning_rate='0.001')
+Hyperparameters: 
+Namespace(dataset='NMD', seq_len='64', model='PG', repre='MH', load_model=None, mutual_c=None, mutual_mc=None, batch_size='64', epoch='100', learning_rate='0.001')
+------------------------epoch 0-------------------------
+Hyperparameters: 
+Namespace(dataset='NMD', seq_len='64', model='PG', repre='MH', load_model=None, mutual_c=None, mutual_mc=None, batch_size='64', epoch='100', learning_rate='0.001')
+------------------------epoch 0-------------------------
+Hyperparameters: 
+Namespace(dataset='NMD', seq_len='64', model='PG', repre='MH', load_model=None, mutual_c=None, mutual_mc=None, batch_size='64', epoch='100', learning_rate='0.001')
+------------------------epoch 0-------------------------

@@ -63,7 +63,7 @@ def melody2event(melody_midi):
     melody_onset_end = [];
     streamm = converter.parse(melody_midi)
     melodys = streamm[0]
-    melody_part = instrument.partitionByInstrument(melodys)
+    melody_part = streamm
     melody_notes = melody_part.parts[0].recurse()
     melody_length = len(melody_notes)
     music = muspy.read_midi(melody_midi, 'pretty_midi')
@@ -111,6 +111,7 @@ def melody2event(melody_midi):
     assert len(pitchs) == len(durations) == len(positions)
     event['pitchs'] = pitchs
     event['durations'] = durations
+    event['bars'] = [pos % 72 for pos in positions] 
     positions=[x//2 for x in positions]
     event['positions'] = positions
     return event

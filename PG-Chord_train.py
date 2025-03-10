@@ -254,7 +254,7 @@ if __name__=="__main__":
     parser.add_argument("--mutual_c", type=str, default=None)
     parser.add_argument("--mutual_mc", type=str, default=None)
     parser.add_argument("--batch_size", type=str, default="64")
-    parser.add_argument("--epoch", type=str, default='100')
+    parser.add_argument("--epoch", type=str, default='1')
     parser.add_argument("--learning_rate", type=str, default='0.001')
     args = parser.parse_args()
 

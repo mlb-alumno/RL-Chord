@@ -7,6 +7,7 @@ import torch
 from model.PPO_Chord import PPO_Chord
 from model.PG_Chord import PG_Chord
 from model.DQN_Chord import DQN_Chord
+from model.BLSTM_Chord_MH import LSTM_Chord
 import pickle
 import muspy
 import os
@@ -16,6 +17,7 @@ from data_process.midi2representation import midi2event
 from evaluate_utils import melody2event, chord_revise, chord_transformation, revise_bar, \
     merge_chord,compute_corpus_level_copy, getTrainChordandDur, hist_sim, duration2type
 from chord_metrics import compute_metrics
+from torch.nn import LSTM
 
 
 def batch_data_win(datas,condition_window,seq_len):
@@ -83,6 +85,44 @@ def generate(src,dis):
     '''
         generate chord for given melody (one sample)
     '''
+    ## ADDED THIS TODO PUT THIS AS ARGS
+
+
+    """
+    import torch
+    from model.BLSTM_Chord_MH import LSTM_Chord
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    condition_window = 8
+    input_size = 64
+    hidden_size = 512
+    # Create the model instance (using BLSTM in this case)
+    model = LSTM_Chord(condition_window, input_size, hidden_size).to(device)
+    # Load model state (adjust paths as needed)
+    model_path = "./saved_models/NMD-BLSTM-MH-64/"
+    load_model = 'NMD-BLSTM-MH-64-epoch0-483.9525146484375.pth'
+    load_model_path = model_path + load_model
+    checkpoint = torch.load(load_model_path, map_location=device)
+    model.load_state_dict(checkpoint['model'])
+    model.eval()
+    """
+    
+    import torch
+    from model.PG_Chord import PG_Chord
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    condition_window = 8
+    input_size = 64
+    hidden_size = 512
+    # Create the model instance (using BLSTM in this case)
+    model = PG_Chord(condition_window, input_size, hidden_size).to(device)
+    # Load model state (adjust paths as needed)
+    model_path = "./saved_models/NMD-PG-MH-64/"
+    load_model = 'epoch0_reward194.189_mle_loss298.743_beta0.000.pth'
+    load_model_path = model_path + load_model
+    checkpoint = torch.load(load_model_path, map_location=device)
+    model.load_state_dict(checkpoint['model'])
+    model.eval()
+
+
     event=melody2event(src)
     seq_len=len(event["bars"])
     one_batch=batch_data_win(event,condition_window,seq_len)
@@ -105,6 +145,10 @@ def generate(src,dis):
             note_t['positions'] = torch.Tensor(note['positions'][i]).to(device)
             note_tt = torch.cat([note_t['pitches'], note_t['durations'], note_t['positions']], dim=1).to(device)
             state = torch.cat([condition_tt, note_tt, chord_t_1], dim=-1).to(device)
+            
+            
+            # you can add this for the BLSTM state = condition_tt
+
             states = state.view(1, 1, -1)
             if args.model=="PG":
                 output_1, output_2, output_4, output_13,hidden = model(states, hidden)
@@ -112,6 +156,8 @@ def generate(src,dis):
                 output_1, output_2, output_4, output_13, hidden,_ = model(states, hidden)
             elif args.model=="DQN":
                 output_1, output_2, output_4, output_13, hidden = model.act(states, hidden)
+            elif args.model=="BLSTM":
+                output_1, output_2, output_4, output_13, hidden = model(states, hidden)
             if output_1[0][0].item() > 0.5:
                 topi_1 = torch.Tensor([[[1]]]).to(device)
             else:
@@ -164,8 +210,8 @@ def generate(src,dis):
         = revise_bar(chord_order, event["pitchs"],event["bars"], event["durations"], times)
 
     # Plagiarism analysis, compute the length of the longest plagiarized subsequence
-    beat_num = compute_corpus_level_copy(chord_order, event["durations"], GT_chord_list, GT_dur_list)
-    corpus_level_copy_num_list.append(beat_num)
+    #beat_num = compute_corpus_level_copy(chord_order, event["durations"], GT_chord_list, GT_dur_list)
+    #corpus_level_copy_num_list.append(beat_num)
     new_chords, new_durations = merge_chord(chord_order, event["bars"], event["durations"])
 
     # compute metrics
@@ -197,7 +243,9 @@ def generate(src,dis):
         # music.tracks.append(chord_track) # keep the orignal chord
         # not keep the orignal chord
         music.tracks.insert(-1,chord_track)
-        music.tracks=music.tracks[:-1]
+        #music.tracks=music.tracks[:-1]
+        print(dis)
+        print(music)
         muspy.write_midi(dis, music)
     return CHS, CTD, CTnCTR, PCS, MCTD, CNR
 
@@ -216,14 +264,15 @@ def generate_compute_metrics(generate_path):
     midi_files = os.listdir(args.test_data_path)
     r = random.random
     random.seed(13)
-    random.shuffle(midi_files, random=r)
+    random.shuffle(midi_files)
     while cnt < len(midi_files) and cnt_64 < int(args.test_num):
         src_path = os.path.join(args.test_data_path, midi_files[cnt])
         music_length = len(midi2event(src_path)['pitchs'])
         # only calculate metrics for music with a length larger than 64
-        if music_length >= 64:
+        if music_length >= 14:
             dis_path = os.path.join(generate_path, midi_files[cnt])
             CHS, CTD, CTnCTR, PCS, MCTD, CNR = generate(src_path, dis_path)
+            print(CHS)
             CHS_ALL.append(CHS)
             CTD_aver += CTD
             CTnCTR_aver += CTnCTR
@@ -261,7 +310,14 @@ if __name__=="__main__":
     hidden_size = 512
     models = {"PG": PG_Chord,
               "DQN": DQN_Chord,
-              "PPO": PPO_Chord}
+              "PPO": PPO_Chord,
+              "BLSTM": LSTM_Chord}
+
+    # I ADDED THIS TODO PUT THIS AS ARGS   
+    # input melody midi - generated midi 
+    # You need to also change the path in events2midi.py script
+    generate('test_melody/mymel2.mid','melodies/mymel3.mid')
+
 
     model = models[args.model](condition_window, input_size, hidden_size).to(device)
     model_path = f"./saved_models/{args.dataset}-{args.model}-{args.repre}-{args.seq_len}/"
@@ -272,7 +328,7 @@ if __name__=="__main__":
 
     # get the real chord and duration sequences
     if not os.path.exists(f"data/{args.dataset}_GT_chord_order_list.data"):
-        chord_order_GT_list, duration_GT_list = getTrainChordandDur(args.train_data_path)
+        chord_order_GT_list, duration_GT_list = getTrainChordandDur(args.test_data_path)
         file = open(f"data/{args.dataset}_GT_chord_order_list.data", 'wb')
         pickle._dump(chord_order_GT_list, file)
         file.close()
@@ -290,12 +346,13 @@ if __name__=="__main__":
     generate_path = f"{args.generate_path}/{args.dataset}-{args.model}-{args.repre}-{args.seq_len}"
     if not os.path.exists(generate_path):
         os.makedirs(generate_path)
+    
     CHS_ALL,CTD_aver,CTnCTR_aver,PCS_aver,MCTD_aver,CNR_aver=generate_compute_metrics(generate_path)
     hist_path = f"{args.hist_path}/{args.dataset}-{args.model}-{args.repre}-{args.seq_len}.data"
     file = open(hist_path, 'wb')
     pickle._dump(CHS_ALL, file)
     file.close()
-    hist_sim()
+    #hist_sim(hist_path=hist_path,h) its broken
     print("CNR_aver: ", CNR_aver)
     print("CTD_aver: ", CTD_aver)
     print("DC_aver: ", CTnCTR_aver)

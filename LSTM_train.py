@@ -156,6 +156,7 @@ def trainIter():
     '''
         training loop
     '''
+    batch_size = int(args.batch_size)
     max_test_loss = 1000
     last_aver = 0
     lr = args.learning_rate
@@ -214,10 +215,7 @@ def trainIter():
                     total_loss / print_every))
                 print("--------------------------------------------------------------")
                 total_loss=0
-        print('epoch: %d, time: %s, train loss : %.6f, test loss : %.6f, learning rate: %.6f, batch_size: %d' % (
-        epoch, timeSince(start_time), total_total_loss / train_start_idx, test_total_loss/test_start_idx, lr,batch_size))
-        f.write('\nepoch: %d, time: %s, train loss : %.6f, test loss : %.6f, learning rate: %.6f, batch_size: %d' % (
-        epoch, timeSince(start_time), total_total_loss / train_start_idx, test_total_loss/test_start_idx, lr,batch_size))
+
         train_average = total_total_loss / train_start_idx
         test_average = test_total_loss / test_start_idx
         train_writer.add_scalar('loss', train_average, epoch)
@@ -260,7 +258,7 @@ if __name__=='__main__':
     parser.add_argument("--repre", type=str, default='MH', help="MH or OH")
     parser.add_argument("--load_model", type=str, default=None)
     parser.add_argument("--batch_size", type=str, default="64")
-    parser.add_argument("--epoch", type=str, default='100')
+    parser.add_argument("--epoch", type=str, default='1') #originally 100
     parser.add_argument("--learning_rate", type=str, default='0.001')
     args = parser.parse_args()
 

@@ -9,7 +9,7 @@ device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class LSTM_Chord(nn.Module):
-    def __init__(self,condition_window,input_size,hidden_size,chord_num,n_layers=2):
+    def __init__(self,condition_window,input_size,hidden_size,n_layers=2):
         super(LSTM_Chord,self).__init__()
         self.condition_window=condition_window
         self.input_size=input_size

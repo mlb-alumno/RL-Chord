@@ -77,28 +77,29 @@ def chord_dur_split(chord_onset_offset,path,type):
     return new_chord
 
 
-def bar_position(music,positions,timr_r=96):
-    '''
-        transform the note position into the within-bar position
-    '''
-    new_positions=[]
-    key_i=0
-    position_i=0
-    times=music.time_signatures
+def bar_position(music, positions, timr_r=96):
+    new_positions = []
+    key_i = 0
+    position_i = 0
+    times = music.time_signatures
     while key_i < len(times):
         bar = (timr_r * times[key_i].numerator) // times[key_i].denominator
-        start=times[key_i].time
-        if key_i+1<len(music.time_signatures):
-            end=times[key_i+1].time
+        start = times[key_i].time
+        # Check if positions list is empty to avoid IndexError
+        if not positions:
+            end = start  # or handle accordingly
         else:
-            end=positions[-1]+1
-        while position_i<len(positions):
+            if key_i + 1 < len(times):
+                end = times[key_i + 1].time
+            else:
+                end = positions[-1] + 1
+        while position_i < len(positions):
             if start <= positions[position_i] < end:
-                new_positions.append((positions[position_i]-start)%bar)
-                position_i+=1
+                new_positions.append((positions[position_i] - start) % bar)
+                position_i += 1
             else:
                 break
-        key_i+=1
+        key_i += 1
     return new_positions
 
 
@@ -106,13 +107,18 @@ def midi2event(midi_path):
     '''
         transform a midi file into the event sequences
     '''
+
+    # TODO ADD THIS AS ARG 
+
+    midi_path = "test_melody/mymel2.mid"
+    
     event={}
     pitchs=[];durations=[];positions=[];chords=[]
     melody_onset_offset = [];chord_onset_offset = []
     streamm = converter.parse(midi_path)
     melodys=streamm[0]
     chordss=streamm[1]
-    melody_part = instrument.partitionByInstrument(melodys)
+    melody_part = streamm
     chord_part = instrument.partitionByInstrument(chordss)
     melody_notes = melody_part.parts[0].recurse()
     chord_notes = chord_part.parts[0].recurse()
