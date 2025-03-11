@@ -11,35 +11,7 @@ import math
 import torch
 from evaluate_utils import duration2type
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-def calculate_voice_leading(current_chords, prev_chords):
-    """
-    Compute voice leading reward based on minimal movement between consecutive chords.
-    """
-    batch_size = len(current_chords)
-    vl_rewards = []
-    
-    for i in range(batch_size):
-        current_pitches = sorted(chord2pitch(current_chords[i]))
-        prev_pitches = sorted(chord2pitch(prev_chords[i]))
-        
-        if not current_pitches or not prev_pitches:
-            vl_rewards.append(0)
-            continue
-
-        min_voices = min(len(current_pitches), len(prev_pitches))
-        movement = sum(
-            abs(current_pitches[j] - prev_pitches[j]) 
-            for j in range(min_voices)
-        )
-        
-        avg_movement = movement / min_voices
-        vl_reward = math.exp(-avg_movement / 12)  # Exponential decay
-        vl_rewards.append(vl_reward)
-    
-    return torch.tensor(vl_rewards, device=device)
-
-
+from collections import Counter
 
 
 
@@ -138,126 +110,158 @@ def batch_data_win(datas,batch_size,condition_window,seq_len):
     return one_batch,chord_real_all
 
 
-def rule_rewards(melody1,duration1,position1,chordOrder1,chord_t_1,Reward_R1,Reward_R2):
-    '''
-        Calculate harmony reward and chord progression reward
-    '''
-    #  interval consonance between the melody and chords
+def rule_rewards(melody1, duration1, position1, chordOrder1, chord_t_1, Reward_R1, Reward_R2):
+    """
+    Calculate harmony reward and chord progression reward, now including tonality consideration.
+    """
+    # Interval consonance between the melody and chords
     duration_sum = 0
     score_between = 0
-    chord_len=len(chordOrder1[2:])
+    chord_len = len(chordOrder1[2:]) if len(chordOrder1) > 2 else 0
     for ii in range(len(melody1)):
         score_b = 0
-        for jj in chordOrder1[2:]:
-            score_b += getHarmonicLevel(jj, melody1[ii]%12)
+        if chord_len > 0:
+            for jj in chordOrder1[2:]:
+                score_b += getHarmonicLevel(jj, melody1[ii] % 12)
         score_between += score_b * type2duration(duration1[ii])
         duration_sum += type2duration(duration1[ii])
-    if chord_len==0:
-        score_between=0
+    if chord_len == 0 or duration_sum == 0:
+        score_between = 0
     else:
-        score_between = score_between / (duration_sum*chord_len)
+        score_between = score_between / (duration_sum * chord_len)
 
-    # consonance of the chord Itself
-    score_self=0
-    if len(chordOrder1)>1:
-        chord_tmp=chordOrder1[2:]
-    else:
-        chord_tmp=chordOrder1
+    # Consonance of the chord itself
+    score_self = 0
+    chord_tmp = chordOrder1[2:] if len(chordOrder1) > 2 else []
     chord_len = len(chord_tmp)
     for ii in range(chord_len):
         for jj in range(ii + 1, chord_len):
             score_self += getHarmonicLevel(chord_tmp[ii], chord_tmp[jj])
-    score_self = score_self / (chord_len * chord_len)
-    score = score_between + score_self
+    if chord_len > 1:
+        score_self /= (chord_len * (chord_len - 1) / 2)
 
-    # chord progression reward
-    # repetition
-    if position1[0]==0:
-        if chordOrder1 == chord_t_1:
-            repetition = -1
-        else:
-            repetition = 0
+    # Key fitness based on melody tonality
+    melody_pitches = [p % 12 for p in melody1 if p != 0]
+    key_fitness = 0
+    if melody_pitches:
+        count = Counter(melody_pitches)
+        tonic = max(count, key=lambda k: count[k])
+        major_scale = {
+            tonic, (tonic + 2) % 12, (tonic + 4) % 12,
+            (tonic + 5) % 12, (tonic + 7) % 12,
+            (tonic + 9) % 12, (tonic + 11) % 12
+        }
+        chord_notes = [note % 12 for note in chordOrder1[2:] if len(chordOrder1) > 2]
+        if chord_notes:
+            in_scale = sum(1 for note in chord_notes if note in major_scale)
+            key_fitness = in_scale / len(chord_notes)
+
+    # Combine scores
+    harmony_score = score_between + score_self + key_fitness
+
+    # Chord progression penalties
+    repetition = 0
+    superstrong = 0
+    if position1[0] == 0:
+        repetition = -1 if chordOrder1 == chord_t_1 else 0
     else:
-        if chordOrder1 == chord_t_1:
-            repetition = 1
-        else:
-            repetition = 0
+        repetition = 1 if chordOrder1 == chord_t_1 else 0
 
-    # superstrong
     if len(chordOrder1) > 1 and len(chord_t_1) > 1:
-        chord_now_pitch = chord2pitch(chordOrder1)
-        chord_t_1_pitch = chord2pitch(chord_t_1)
-        cnt=0
-        for iii in chord_now_pitch:
-            if iii in chord_t_1_pitch:
-                cnt+=1
-        if cnt == 0:
-            superstrong = -1
-        else:
-            superstrong = 0
-    else:
-        superstrong = 0
+        current_pitches = set(chord2pitch(chordOrder1))
+        prev_pitches = set(chord2pitch(chord_t_1))
+        superstrong = -1 if current_pitches.isdisjoint(prev_pitches) else 0
+
     progression_penalty = repetition + superstrong
-    return Reward_R1*score+Reward_R2*progression_penalty
+
+    return Reward_R1 * harmony_score + Reward_R2 * progression_penalty
 
 
-def Reward(chord, chord_real, action1, action2, action4, action13, melody_pitch, melody_duration, melody_position,
-           Reward_L, Reward_R1, Reward_R2, Reward_R3, batch_size, seq_len, condition_window, harmony_rule_window,
-           criterion_1, criterion_2, criterion_4, criterion_13):
-    """
-    Compute the rewards (including voice leading) for all actions.
-    """
+def Reward(chord,chord_real,action1,action2,action4,action13,melody_pitch,melody_duration,melody_position,
+           Reward_L,Reward_R1,Reward_R2,batch_size,seq_len,condition_window,harmony_rule_window,
+           criterion_1,criterion_2,criterion_4,criterion_13):
+    '''
+        Compute the rewards (with the expection of mutual reward) for all actions
+    '''
+    # negative loss reward
     chord_gt = torch.Tensor(chord[1:]).to(device)
     chord_gt_1 = chord_gt.narrow(2, 0, 1)
-    _, chord_gt_2 = chord_gt.narrow(2, 1, 2).topk(1)
-    _, chord_gt_4 = chord_gt.narrow(2, 3, 4).topk(1)
+    _,chord_gt_2 = chord_gt.narrow(2, 1, 2).topk(1)
+    _,chord_gt_4 = chord_gt.narrow(2, 3, 4).topk(1)
     chord_gt_2 = torch.LongTensor(chord_gt_2.squeeze(-1).cpu().numpy()).to(device)
     chord_gt_4 = torch.LongTensor(chord_gt_4.squeeze(-1).cpu().numpy()).to(device)
     chord_gt_13 = chord_gt.narrow(2, 7, 13)
     action2_oh = torch.Tensor(nn.functional.one_hot(action2.squeeze(-1), 2).cpu().numpy()).to(device)
     action4_oh = torch.Tensor(nn.functional.one_hot(action4.squeeze(-1), 4).cpu().numpy()).to(device)
-    
-    l_2, l_4 = [], []
+    l_2=[];l_4=[]
     for i in range(seq_len):
-        l_2.append(criterion_2(action2_oh[i], chord_gt_2[i]))
-        l_4.append(criterion_4(action4_oh[i], chord_gt_4[i]))
-    
+        l_2_tmp=criterion_2(action2_oh[i], chord_gt_2[i])
+        l_4_tmp = criterion_4(action4_oh[i], chord_gt_4[i])
+        l_2.append(l_2_tmp)
+        l_4.append(l_4_tmp)
     l_1 = criterion_1(action1, chord_gt_1).sum(dim=-1)
     l_2 = torch.stack(l_2)
     l_4 = torch.stack(l_4)
     l_13 = criterion_13(action13 / 1000, chord_gt_13)
     loss_reward = -(l_1 + l_2 + l_4 + l_13).detach().to(device)
-    
+
+    # identical pitch reward
     _, indices13 = action13.topk(5)
-    chord_order = torch.cat((action1, action2, action4, indices13), dim=-1).int().cpu().numpy().tolist()
+    chord_order=torch.cat((action1,action2, action4, indices13),dim=-1).int().cpu().numpy().tolist()
     chordOrder = ChordOrder(chord_order)
-    
-    pitch_diff = []
+    chord_gt=chord_real
+    pitch_diff=[]
     for ii in range(seq_len):
-        pitch_diff.append([len(set(chord2pitch(chordOrder[ii][jj])) & set(chord2pitch(chord_real[ii][jj])))
-                           for jj in range(batch_size)])
-    pitch_diff = torch.Tensor(pitch_diff).detach().to(device)
-    
+        seq_t=[]
+        for jj in range(batch_size):
+            action_one = set(chord2pitch(chordOrder[ii][jj]))
+            action_gt = set(chord2pitch(chord_gt[ii][jj]))
+            seq_t.append(len(action_one&action_gt))
+        pitch_diff.append(seq_t)
+    pitch_diff=torch.Tensor(pitch_diff).detach().to(device)
+
+    # compute rule reward including interval consonance, repetition, and superstrong
+    melody_pitch_new=[]
+    melody_duration_new=[]
+    melody_position_new = []
+    for i in range(seq_len):
+        chord_index=i
+        if chord_index - int((condition_window) / 2) >= 0 and chord_index + int((condition_window) / 2) <= seq_len:
+            start = 4 - harmony_rule_window // 2
+            bar_pos=4
+        else:
+            if chord_index < int((condition_window) / 2):
+                if chord_index == 0:
+                    start = 0
+                    bar_pos=0
+                else:
+                    start = chord_index - harmony_rule_window // 2
+                    bar_pos=chord_index
+            else:
+                chord_index_tmp = chord_index - seq_len + condition_window
+                bar_pos = chord_index_tmp
+                if chord_index_tmp+1<condition_window-1:
+                    start = chord_index_tmp - harmony_rule_window // 2
+                else:
+                    end=condition_window-1
+                    start=end-harmony_rule_window+1
+        melody_pitch_new.append(melody_pitch[i].narrow(1,start,harmony_rule_window))
+        melody_duration_new.append(melody_duration[i].narrow(1, start, harmony_rule_window))
+        melody_position_new.append(melody_position[i].narrow(1, bar_pos, 1))
+    melody_pitch_new=torch.stack(melody_pitch_new).cpu().numpy().tolist()
+    melody_duration_new = torch.stack(melody_duration_new).cpu().numpy().tolist()
+    melody_position_new= torch.stack(melody_position_new).cpu().numpy().tolist()
     rule_reward = []
     for seq in range(seq_len):
         reward_t = []
         for batch in range(batch_size):
-            chord_t_1 = binary2chord(chord[seq][batch])
-            reward_t.append(rule_rewards(melody_pitch[seq][batch], melody_duration[seq][batch], melody_position[seq][batch],
-                                         chordOrder[seq][batch], chord_t_1, Reward_R1, Reward_R2))
+            chord_t_1 = chord[seq][batch]
+            chord_t_1 = binary2chord(chord_t_1)
+            reward_t.append(rule_rewards(melody_pitch_new[seq][batch],melody_duration_new[seq][batch],melody_position_new[seq][batch],
+                                        chordOrder[seq][batch],chord_t_1,Reward_R1,Reward_R2))
         rule_reward.append(reward_t)
-    rule_reward = torch.Tensor(rule_reward).detach().to(device)
-    
-    # Compute voice leading reward
-    voice_leading_rewards = []
-    for seq in range(1, seq_len):
-        vl_reward = calculate_voice_leading(chordOrder[seq], chordOrder[seq - 1])
-        voice_leading_rewards.append(vl_reward)
-    
-    voice_leading_rewards.insert(0, torch.zeros(batch_size, device=device))  # No previous chord for first step
-    voice_leading_rewards = torch.stack(voice_leading_rewards)
-    
-    total_reward = (Reward_L * loss_reward + pitch_diff + rule_reward + Reward_R3 * voice_leading_rewards).detach().unsqueeze(-1)
+    rule_reward=torch.Tensor(rule_reward).detach().to(device)
+    total_reward = (Reward_L * loss_reward+pitch_diff+ rule_reward).detach().unsqueeze(-1)
     return total_reward
 
 
@@ -438,7 +442,7 @@ def type2duration(d):
         '10': 36,
         '11': 48
     }
-    result = dur2type[str(int(d.item()))]
+    result = dur2type[str(d)]
     return result
 
 

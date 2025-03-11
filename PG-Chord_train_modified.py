@@ -87,7 +87,7 @@ def sample_batch_data(one_batch,chord_real,batch_size,type):
     # get rewards of all steps
     rewards = Reward(chord,chord_real,action1,action2,action4,action13,
                      condition_pitch, condition_duration,condition_position,
-                     Reward_L,Reward_R1,Reward_R2,Reward_R3,batch_size, seq_len,
+                     Reward_L,Reward_R1,Reward_R2,batch_size, seq_len,
                      condition_window, harmony_rule_window, criterion_1,
                      criterion_2, criterion_4, criterion_13)
     rewards+=mutual_reward
