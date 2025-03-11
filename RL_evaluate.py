@@ -19,6 +19,9 @@ from evaluate_utils import melody2event, chord_revise, chord_transformation, rev
 from chord_metrics import compute_metrics
 from torch.nn import LSTM
 
+import torch.nn.functional as F
+
+
 
 def batch_data_win(datas, condition_window, seq_len):
     '''
@@ -80,17 +83,15 @@ def batch_data_win(datas, condition_window, seq_len):
     return one_batch
 
 
-def generate(src, dis):
-    '''
-    Generate chord for a given melody (one sample)
-    '''
-    import torch
+def generate(src, dis, temperature=1.0):
+    """
+    Generate chord for a given melody (one sample) with temperature-based sampling.
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     condition_window = 8
     input_size = 64
     hidden_size = 512
 
-    # Dynamically choose the model class based on args.model.
     models = {"PG": PG_Chord,
               "DQN": DQN_Chord,
               "PPO": PPO_Chord,
@@ -98,23 +99,11 @@ def generate(src, dis):
     model_class = models[args.model]
     model = model_class(condition_window, input_size, hidden_size).to(device)
     
-    # Build the model load path dynamically:
-    if args.load_model is not None:
-        # Use the provided load_model filename from command-line args.
+    if args.load_model:
         model_dir = f"./saved_models/{args.dataset}-{args.model}-{args.repre}-{args.seq_len}"
         load_model_path = os.path.join(model_dir, args.load_model)
     else:
-        # Default paths for each model type
-        if args.model == "PG":
-            load_model_path = "./saved_models/NMD-PG-MH-64/epoch0_reward194.189_mle_loss298.743_beta0.000.pth"
-        elif args.model == "PPO":
-            load_model_path = "./saved_models/NMD-PPO-MH-64/your_default_model.pth"
-        elif args.model == "DQN":
-            load_model_path = "./saved_models/NMD-DQN-MH-64/your_default_model.pth"
-        elif args.model == "BLSTM":
-            load_model_path = "./saved_models/NMD-BLSTM-MH-64/NMD-BLSTM-MH-64-epoch0-483.9525146484375.pth"
-        else:
-            raise ValueError("Unsupported model type provided.")
+        raise ValueError("Model path must be provided.")
     
     checkpoint = torch.load(load_model_path, map_location=device)
     model.load_state_dict(checkpoint['model'])
@@ -126,90 +115,65 @@ def generate(src, dis):
     chord_t_1 = torch.Tensor(one_batch['chords'][0]).to(device)
     hidden = None
     chord_order = []
-    chord_order_GT = []
-    if args.repre != "GT":
-        for i in range(seq_len):
-            condition = one_batch['condition']
-            note = one_batch['note_t']
-            condition_t = {}
-            note_t = {}
-            condition_t['pitches'] = torch.LongTensor(condition['pitches'][i]).to(device)
-            condition_t['durations'] = torch.LongTensor(condition['durations'][i]).to(device)
-            condition_t['positions'] = torch.LongTensor(condition['positions'][i]).to(device)
-            condition_tt = torch.cat([condition_t['pitches'], condition_t['durations'],
-                                      condition_t['positions']], dim=1).to(device)
-            note_t['pitches'] = torch.Tensor(note['pitches'][i]).to(device)
-            note_t['durations'] = torch.Tensor(note['durations'][i]).to(device)
-            note_t['positions'] = torch.Tensor(note['positions'][i]).to(device)
-            note_tt = torch.cat([note_t['pitches'], note_t['durations'], note_t['positions']], dim=1).to(device)
-            state = torch.cat([condition_tt, note_tt, chord_t_1], dim=-1).to(device)
-            states = state.view(1, 1, -1)
-            if args.model == "PG":
-                output_1, output_2, output_4, output_13, hidden = model(states, hidden)
-            elif args.model == "PPO":
-                output_1, output_2, output_4, output_13, hidden, _ = model(states, hidden)
-            elif args.model == "DQN":
-                output_1, output_2, output_4, output_13, hidden = model.act(states, hidden)
-            elif args.model == "BLSTM":
-                output_1, output_2, output_4, output_13, hidden = model(states, hidden)
-            if output_1[0][0].item() > 0.5:
-                topi_1 = torch.Tensor([[[1]]]).to(device)
-            else:
-                topi_1 = torch.Tensor([[[0]]]).to(device)
-            topv, topi_2 = output_2.topk(1)
-            topv, topi_4 = output_4.topk(1)
-            topv, topi_13 = output_13.topk(5)
-            ctmp = torch.cat((topi_1, topi_2, topi_4, topi_13), dim=-1)[0][0].int().cpu().numpy().tolist()
-            if ctmp[0] == 1:
-                chord_order.append([0])
-                chord_0 = [0] * 20
-                chord_0[0] = 1
-                chord_t_1 = torch.Tensor([chord_0]).to(device)
-            else:
-                chord_t_1 = torch.Tensor(1, 20).zero_().to(device)
-                chord_t_1[0][1 + ctmp[1]] = 1
-                chord_t_1[0][3 + ctmp[2]] = 1
-                if 12 in ctmp:
-                    ctmp.remove(12)
-                    if ctmp[2] < 3:
-                        chord_order_new = chord_transformation(ctmp[1:-1])
-                    else:
-                        chord_order_new = chord_transformation(ctmp[1:])
-                else:
-                    chord_order_new = chord_transformation(ctmp[1:-1])
-                chord_order_new = chord_revise(chord_order_new)
-                chord_order_new = chord_transformation(chord_order_new)
-                chord_order_new_new = [chord_order_new[0]]
-                chord_order_new_new.extend(chord_order_new[2:])
-                chord_order.append(chord_order_new_new)
-                if len(chord_order_new_new[1:]) == 3:
-                    chord_t_1[0][-1] = 1
-                for p in chord_order_new_new[1:]:
-                    chord_t_1[0][7 + p] = 1
-    else:
-        chord_order_new_GT = midi2event(src)['chords']
-        for i in range(len(chord_order_new_GT)):
-            if len(chord_order_new_GT[i]) > 1:
-                chord_new = chord_revise(chord_order_new_GT[i])
-                chord_new = chord_transformation(chord_new)
-                chord_order_new_new = [chord_new[0]]
-                chord_order_new_new.extend(chord_new[2:])
-                chord_order_GT.append(chord_order_new_new)
-                chord_order_GT[i][0] = chord_order_GT[i][0] - 2
-            else:
-                chord_order_GT.append([0])
+    
+    for i in range(seq_len):
+        condition = one_batch['condition']
+        note = one_batch['note_t']
+        condition_t = {key: torch.LongTensor(condition[key][i]).to(device) for key in condition}
+        note_t = {key: torch.Tensor(note[key][i]).to(device) for key in note}
+        
+        condition_tt = torch.cat([condition_t['pitches'], condition_t['durations'], condition_t['positions']], dim=1).to(device)
+        note_tt = torch.cat([note_t['pitches'], note_t['durations'], note_t['positions']], dim=1).to(device)
+        state = torch.cat([condition_tt, note_tt, chord_t_1], dim=-1).to(device)
+        states = state.view(1, 1, -1)
+        
+        if args.model in ["PG", "PPO"]:
+            output_1, output_2, output_4, output_13, hidden = model(states, hidden)
+        elif args.model == "DQN":
+            output_1, output_2, output_4, output_13, hidden = model.act(states, hidden)
+        elif args.model == "BLSTM":
+            output_1, output_2, output_4, output_13, hidden = model(states, hidden)
+        
+        # Sample chord presence with temperature
+        probs_1 = torch.sigmoid(output_1 / temperature)
+        topi_1 = torch.bernoulli(probs_1).to(device)
+                # Sample chord parameters using softmax + temperature
+        output_2 = output_2.squeeze(0)  # Remove batch dimension if necessary
+        output_4 = output_4.squeeze(0)
+        output_13 = output_13.squeeze(0)
+
+        # Sample chord parameters using softmax + temperature
+        topi_2 = torch.multinomial(F.softmax(output_2 / temperature, dim=-1), 1).unsqueeze(0)
+        topi_4 = torch.multinomial(F.softmax(output_4 / temperature, dim=-1), 1).unsqueeze(0)
+        topi_13 = torch.multinomial(F.softmax(output_13 / temperature, dim=-1), 5).unsqueeze(0)
+        
+        ctmp = torch.cat((topi_1, topi_2, topi_4, topi_13), dim=-1)[0][0].int().cpu().numpy().tolist()
+        
+        if ctmp[0] == 1:
+            chord_order.append([0])
+            chord_0 = [0] * 20
+            chord_0[0] = 1
+            chord_t_1 = torch.Tensor([chord_0]).to(device)
+        else:
+            chord_t_1 = torch.zeros(1, 20).to(device)
+            chord_t_1[0][1 + ctmp[1]] = 1
+            chord_t_1[0][3 + ctmp[2]] = 1
+            chord_order_new = chord_transformation(ctmp[1:-1])
+            chord_order_new = chord_revise(chord_order_new)
+            chord_order.append(chord_order_new)
+            for p in chord_order_new[1:]:
+                chord_t_1[0][7 + p] = 1
+    
     music = muspy.read_midi(src, 'pretty_midi')
     times = music.time_signatures
-    chord_order, event["pitchs"], event["bars"], event["durations"] = revise_bar(chord_order, event["pitchs"],
-                                                                               event["bars"],
-                                                                               event["durations"], times)
+    chord_order, event["pitchs"], event["bars"], event["durations"] = revise_bar(
+        chord_order, event["pitchs"], event["bars"], event["durations"], times
+    )
     new_chords, new_durations = merge_chord(chord_order, event["bars"], event["durations"])
 
-    # Compute metrics
-    CHS, CTD, CTnCTR, PCS, MCTD, CNR = compute_metrics(new_chords, new_durations, event["bars"], event["pitchs"],
-                                                        event["durations"])
+    
 
-    # Combine the generated chords with the original melody into a new midi if requested
+    # Combine generated chords with the melody into a new MIDI file if requested
     if args.generate_midi:
         notesss = []
         start_time = 0
@@ -217,27 +181,28 @@ def generate(src, dis):
             chord_t = new_chords[i]
             if len(chord_t) != 1:
                 chords = []
-                if chord_t[0] == 0:
-                    t = 2
-                if chord_t[0] == 1:
-                    t = 3
+                t = 2 if chord_t[0] == 0 else 3
                 offset = 0
                 for j in range(1, len(chord_t)):
                     if j > 1 and chord_t[j] < chord_t[j - 1]:
                         offset += 1
                     pitch = 12 + (t + offset) * 12 + chord_t[j]
-                    notee = muspy.Note(time=start_time, pitch=pitch,
-                                       duration=new_durations[i],
-                                       velocity=music.tracks[0].notes[0].velocity)
+                    notee = muspy.Note(
+                        time=start_time, pitch=pitch,
+                        duration=new_durations[i],
+                        velocity=music.tracks[0].notes[0].velocity
+                    )
                     chords.append(notee)
                 notesss.extend(chords)
             start_time += new_durations[i]
+        
         chord_track = muspy.Track(program=0, is_drum=False, name='', notes=notesss)
         music.tracks.insert(-1, chord_track)
         print(dis)
         print(music)
         muspy.write_midi(dis, music)
-    return CHS, CTD, CTnCTR, PCS, MCTD, CNR
+
+
 
 
 def generate_compute_metrics(generate_path):
@@ -292,6 +257,8 @@ if __name__ == "__main__":
     parser.add_argument("--generate_path", type=str, default=None)
     parser.add_argument("--hist_path", type=str, default=None, help="Save histogram for the CHS metric")
     parser.add_argument("--test_num", type=int, default=100)
+    parser.add_argument("--temperature", type=float, default=1)
+
     # New arguments for single inference
     parser.add_argument("--input_path", type=str, default=None, help="Path to input midi file")
     parser.add_argument("--output_path", type=str, default=None, help="Path to output midi file")
@@ -300,11 +267,11 @@ if __name__ == "__main__":
 
     # If input_path and output_path are provided, run single inference and exit.
     if args.input_path is not None and args.output_path is not None:
-        generate(args.input_path, args.output_path)
+        generate(args.input_path, args.output_path,args.temperature)
         exit(0)
 
     # Otherwise, load the model for batch evaluation.
-    condition_window = 8
+    condition_window = 16 # originally 8
     input_size = 64
     hidden_size = 512
     models = {"PG": PG_Chord,
